@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bufio"
 	"crypto/tls"
 	"flag"
 	"fmt"
 	"log"
 	"net"
 	"os"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -17,37 +20,88 @@ func main() {
 		domain         = flag.String("domain", "", "domain to validate")
 		interval       = flag.Duration("interval", time.Second*30, "interval to validate domain")
 		papertrailAddr = flag.String("papertrail", "", "papertrail destination address logsN.papertrailapp.com:XXXXX (optional)")
+		domains        = flag.String("domains", "", "text file contain domains to validate, see sample")
 	)
 	flag.Parse()
 
-	log.SetPrefix(fmt.Sprintf("[%s - %s] ", appName, *domain))
+	log.SetPrefix(fmt.Sprintf("[%s] ", appName))
 
 	log.Printf("Checking domain certificate every %s", *interval)
 	if *papertrailAddr != "" {
 		log.Printf("Certificate failures will be logged to papertrail at %s", *papertrailAddr)
 	}
-
+	var domainsList []string
+	if *domain != "" {
+		domainsList = []string{*domain}
+	}
+	if *domains != "" {
+		domainsFromFile := getDomains(*domains)
+		domainsList = append(domainsList, domainsFromFile...)
+	}
 	for {
-		if err := validateDomain(*domain); err != nil {
-			log.Printf(err.Error())
-			if err := paperlog(*papertrailAddr, err.Error()); err != nil {
-
-			}
-		}
+		runValidation(domainsList, *papertrailAddr)
 		time.Sleep(*interval)
 	}
 
+}
+
+func runValidation(domainsList []string, papertrailAddr string) {
+	var wg sync.WaitGroup
+	for _, domain := range domainsList {
+		domain = strings.TrimSpace(domain)
+		if domain == "" {
+			continue
+		}
+		wg.Add(1)
+		go func(domain string) {
+			defer wg.Done()
+			if err := validateDomain(domain); err != nil {
+				log.Printf(err.Error())
+				if err := paperlog(papertrailAddr, err.Error()); err != nil {
+					log.Printf(err.Error())
+				}
+			}
+		}(domain)
+	}
+	wg.Wait()
+}
+
+// getDomains reads a file containing a list of domains to validate and returns a slice of domains
+func getDomains(domainsFile string) []string {
+	file, err := os.Open(domainsFile)
+	if err != nil {
+		log.Fatalf("failed to open domains file: %v", err)
+	}
+	defer func(file *os.File) {
+		err := file.Close()
+		if err != nil {
+			log.Printf("failed to close domains file: %v", err)
+		}
+	}(file)
+
+	var domains []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		domains = append(domains, scanner.Text())
+	}
+	if err := scanner.Err(); err != nil {
+		log.Fatalf("failed to read domains file: %v", err)
+	}
+	return domains
 }
 
 func validateDomain(domain string) error {
 	ips, err := net.LookupIP(domain)
 	if err != nil {
 		return fmt.Errorf("Failed to resolve domain %s: %v\n", domain, err)
-
 	}
 
 	var errs []string
 	for _, ip := range ips {
+		if ip.To4() == nil {
+			// log.Printf("Skipping IPv6 address %s for domain %s, only IPv4 addresses are supported", ip.String(), domain)
+			continue
+		}
 		if err := checkCertificate(domain, ip.String()); err != nil {
 			errs = append(errs, err.Error())
 		}
@@ -64,7 +118,7 @@ func checkCertificate(domain, ip string) error {
 		ServerName: domain,
 	})
 	if err != nil {
-		return fmt.Errorf("Failed to connect or verify certificate for %s: %v\n", address, err)
+		return fmt.Errorf("Failed to connect or verify certificate for %s - %s: %v\n", domain, address, err)
 
 	}
 	defer func(conn *tls.Conn) {
@@ -76,12 +130,15 @@ func checkCertificate(domain, ip string) error {
 
 	certs := conn.ConnectionState().PeerCertificates
 	if len(certs) == 0 {
-		return fmt.Errorf("No certificates found for %s\n", address)
+		return fmt.Errorf("No certificates found for %s - %s\n", domain, address)
 	}
 	return nil
 }
 
 func paperlog(papertrailAddr, message string) error {
+	if papertrailAddr == "" {
+		return nil
+	}
 	hostname, err := os.Hostname()
 	if err != nil {
 		hostname = fmt.Sprintf("%s-host", appName)
