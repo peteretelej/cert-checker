@@ -27,9 +27,11 @@ You can run the app using the following command-line options:
 ```
 Usage of cert-check:
   -domain string
-        domain to validate (required)
+        domain to validate
+  -domains string
+        text file contain domains to validate, see sample (optional)
   -interval duration
-        interval to validate domain (default 30s)
+        interval to validate domain (optional, default 30s) (default 30s)
   -papertrail string
         papertrail destination address logsN.papertrailapp.com:XXXXX (optional)
 ```

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -18,9 +19,9 @@ const appName = "cert-checker"
 func main() {
 	var (
 		domain         = flag.String("domain", "", "domain to validate")
-		interval       = flag.Duration("interval", time.Second*30, "interval to validate domain")
+		interval       = flag.Duration("interval", time.Second*30, "interval to validate domain (optional, default 30s)")
 		papertrailAddr = flag.String("papertrail", "", "papertrail destination address logsN.papertrailapp.com:XXXXX (optional)")
-		domains        = flag.String("domains", "", "text file contain domains to validate, see sample")
+		domains        = flag.String("domains", "", "text file contain domains to validate, see sample (optional)")
 	)
 	flag.Parse()
 
@@ -30,28 +31,39 @@ func main() {
 	if *papertrailAddr != "" {
 		log.Printf("Certificate failures will be logged to papertrail at %s", *papertrailAddr)
 	}
-	var domainsList []string
-	if *domain != "" {
-		domainsList = []string{*domain}
+	if *domain == "" && *domains == "" {
+		log.Fatalf("You must provide a domain to validate, or domains file")
 	}
+	var domainsList []string
 	if *domains != "" {
-		domainsFromFile := getDomains(*domains)
-		domainsList = append(domainsList, domainsFromFile...)
+		domainsList = getDomains(*domains)
+	}
+	if *domain != "" {
+		domainsList = append(domainsList, *domain)
+	}
+	var domainsToCheck []string
+	seen := make(map[string]bool)
+	for _, v := range domainsList {
+		v = sanitizeDomain(v)
+		if v == "" {
+			continue
+		}
+		if seen[v] {
+			continue
+		}
+		seen[v] = true
+		domainsToCheck = append(domainsToCheck, v)
 	}
 	for {
-		runValidation(domainsList, *papertrailAddr)
+		runValidation(domainsToCheck, *papertrailAddr)
 		time.Sleep(*interval)
 	}
 
 }
 
-func runValidation(domainsList []string, papertrailAddr string) {
+func runValidation(domainsToCheck []string, papertrailAddr string) {
 	var wg sync.WaitGroup
-	for _, domain := range domainsList {
-		domain = strings.TrimSpace(domain)
-		if domain == "" {
-			continue
-		}
+	for _, domain := range domainsToCheck {
 		wg.Add(1)
 		go func(domain string) {
 			defer wg.Done()
@@ -60,10 +72,27 @@ func runValidation(domainsList []string, papertrailAddr string) {
 				if err := paperlog(papertrailAddr, err.Error()); err != nil {
 					log.Printf(err.Error())
 				}
+			} else {
+				log.Printf("Domain %s is valid", domain)
 			}
 		}(domain)
 	}
 	wg.Wait()
+}
+
+func sanitizeDomain(domain string) string {
+	domain = strings.TrimSpace(domain)
+	if domain == "" {
+		return ""
+	}
+	if !strings.Contains(domain, "http") {
+		return ""
+	}
+	parsedURL, err := url.Parse(domain)
+	if err != nil {
+		return domain
+	}
+	return parsedURL.Hostname()
 }
 
 // getDomains reads a file containing a list of domains to validate and returns a slice of domains
