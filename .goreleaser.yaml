@@ -1,0 +1,30 @@
+# .goreleaser.yml
+project_name: cert-checker
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+archive:
+  format: tar.gz
+  replacements:
+    darwin: Mac
+    linux: Linux
+    windows: Windows
+    386: 32-bit
+    amd64: 64-bit
+checksum:
+  name_template: 'checksums.txt'
+snapshot:
+  name_template: "{{ .Tag }}-next"
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
