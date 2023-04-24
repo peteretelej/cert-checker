@@ -5,3 +5,5 @@ cert-checker
 
 dist/
 domains.txt
+
+*.log
