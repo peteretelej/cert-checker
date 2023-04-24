@@ -1,4 +1,8 @@
-# Cert-Check
+# cert-checker
+
+A set of cross-language programs to validate SSL/TLS certificates.
+
+# Cert-Check (go version)
 [![GitHub release (latest by date)](https://img.shields.io/github/v/release/peteretelej/cert-checker)](https://github.com/peteretelej/cert-checker/releases)
 [![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Go Report Card](https://goreportcard.com/badge/github.com/peteretelej/cert-checker)](https://goreportcard.com/report/github.com/peteretelej/cert-checker)
