@@ -2,7 +2,9 @@
 {
     using System.Net.Security;
     using System.Net.Sockets;
+    using System.Threading.Tasks;
     using System.Security.Cryptography.X509Certificates;
+    using System.Text;
 
     internal class Program
     {
@@ -93,6 +95,56 @@
                 string logEntry = $"[{DateTime.UtcNow}] Domain: {domain}, Error: {errorMessage}";
                 Console.WriteLine(logEntry);
                 await logFile.WriteLineAsync(logEntry);
+            }
+            try
+            {
+                await LogErrorToPapertrailAsync(errorMessage);
+            }
+            catch(Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+            }
+        }
+
+        private static async Task LogErrorToPapertrailAsync(string errorMessage)
+        {
+            var papertrailDestination = Environment.GetEnvironmentVariable("PAPERTRAIL");
+
+            if (string.IsNullOrEmpty(papertrailDestination))
+            {
+                return;
+            }
+
+            var destinationParts = papertrailDestination.Split(':');
+            if (destinationParts.Length != 2)
+            {
+                Console.WriteLine("Invalid PAPERTRAIL environment variable format. Expected format: <host>:<port>");
+                return;
+            }
+
+            var host = destinationParts[0];
+            if (!int.TryParse(destinationParts[1], out int port))
+            {
+                Console.WriteLine("Invalid PAPERTRAIL environment variable format. Port should be a number.");
+                return;
+            }
+
+            await SendLogAsync(host, port, errorMessage);
+        }
+
+        private static async Task SendLogAsync(string host, int port, string message)
+        {
+            using (var udpClient = new UdpClient())
+            {
+                try
+                {
+                    var logMessage = Encoding.ASCII.GetBytes(message);
+                    await udpClient.SendAsync(logMessage, logMessage.Length, host, port);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error sending log to Papertrail: {ex.Message}");
+                }
             }
         }
     }
