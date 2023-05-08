@@ -17,12 +17,14 @@ fi
 function log_message() {
     local logmessage="$1"
 
+    echo "$logmessage"
+    echo "$logmessage" >> bash_cert-checker.log
+
     if [[ "$papertrail_flag" == true ]]; then
         paperlog --addr="$papertrail" --appname="bash_cert-checker" --message="$logmessage"
-    else
-        echo "$logmessage"
     fi
 }
+
 
 check_hostname() {
     domain=$1
@@ -71,12 +73,37 @@ while read -r line; do
     issuer_cert=$(echo "$cert_data" | awk 'BEGIN {p=0} /-----BEGIN CERTIFICATE-----/ {p=1} p; /-----END CERTIFICATE-----/ {p=0}')
     cert_pem=$(echo "$cert_data" | openssl x509)
 
-    # Check certificate chain validation
-    chain_valid=$(echo "$cert_pem" | openssl verify -untrusted <(echo "$issuer_cert") 2>&1)
-    if [ "$chain_valid" != "stdin: OK" ]; then
+    # Check certificate chain validation with retry
+    retry_count=0
+    max_retries=3
+    issuer_cert_file=$(mktemp)
+    cert_pem_file=$(mktemp)
+
+    echo "$issuer_cert" > "$issuer_cert_file"
+    echo "$cert_pem" > "$cert_pem_file"
+
+    while [ "$retry_count" -lt "$max_retries" ]; do
+        chain_valid=$(openssl verify -untrusted "$issuer_cert_file" "$cert_pem_file" 2>&1)
         error_message=$(echo "$chain_valid" | cut -d':' -f2-)
-        log_message "[$(date)] - Certificate chain validation failed for $domain. Reason: $error_message"
-    fi
+
+        if [ "$chain_valid" == "${cert_pem_file}: OK" ]; then
+            break
+        fi
+
+        ((retry_count++))
+        
+        log_message "[$(date)] - Retry (${retry_count}/${max_retries}) Certificate chain validation failed for $domain (retry $((retry_count - 1))). Reason: $error_message"
+        log_message "[$(date)] - Certificate chain validation failed for $domain after $max_retries retries. Reason: $error_message"
+        log_message "[$(date)] - Cert PEM: $cert_pem"
+        log_message "[$(date)] - Issuer Cert: $issuer_cert"
+           
+        if [ "$retry_count" -lt "$max_retries" ]; then
+            sleep 5 # wait for 5 seconds before retrying
+        fi
+    done
+
+   
+
 
     # Check signature algorithm and key strength
     signature_algo=$(echo "$cert_data" | openssl x509 -noout -text | grep "Signature Algorithm")
@@ -93,11 +120,37 @@ while read -r line; do
 
     # Check for certificate revocation status
     ocsp_url=$(echo "$cert_data" | openssl x509 -noout -ocsp_uri)
-    ocsp_response=$(echo -e "issuer\n$issuer_cert\n\nuser\n$cert_pem" | openssl ocsp -issuer /dev/stdin -cert /dev/stdin -url "$ocsp_url" 2>&1)
 
-    if echo "$ocsp_response" | grep -q 'Revoked'; then
-        log_message "[$(date)] - Certificate revoked for $domain: $ocsp_response"
+    if [ -n "$ocsp_url" ]; then
+        ocsp_response=""
+        for i in {1..3}; do
+            ocsp_response=$(openssl ocsp -no_nonce -issuer "$issuer_cert_file" -cert "$cert_pem_file" -VAfile "$issuer_cert_file" -text -url "$ocsp_url" -header "Host=$(basename "$ocsp_url")" -respout /dev/null 2>&1)
+            exit_status=$?
+            if [ $exit_status -eq 0 ]; then
+                break
+            fi
+            if [[ $ocsp_response == *"unauthorized (6)"* ]]; then
+                log_message "[$(date)] - OCSP Responder Error: unauthorized (6) for $domain (retry $i). The OCSP responder may not be configured correctly for this certificate."
+            else
+                log_message "[$(date)] - Error when checking certificate revocation status for $domain (retry $i). Exit status: $exit_status. Error: $ocsp_response"
+            fi
+            sleep 5
+        done
+
+
+
+        if [ -z "$ocsp_response" ]; then
+            log_message "[$(date)] - Failed to check certificate revocation status for $domain due to network issues after 3 retries"
+        elif echo "$ocsp_response" | grep -q 'Revoked'; then
+            log_message "[$(date)] - Certificate revoked for $domain: $ocsp_response"
+        fi
+    else
+        log_message "[$(date)] - No OCSP URL found for $domain"
     fi
+
+
+     # Cleanup temporary files
+    rm -f "$issuer_cert_file" "$cert_pem_file"
 
 done < domains.txt
 
