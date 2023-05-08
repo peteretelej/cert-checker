@@ -18,7 +18,7 @@ function log_message() {
     local logmessage="$1"
 
     echo "$logmessage"
-    echo "$logmessage" >> bash_cert-checker.log
+    echo "$logmessage" >> log_bash_cert-checker.log
 
     if [[ "$papertrail_flag" == true ]]; then
         paperlog --addr="$papertrail" --appname="bash_cert-checker" --message="$logmessage"
