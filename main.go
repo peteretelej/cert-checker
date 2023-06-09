@@ -39,15 +39,25 @@ func main() {
 	if *papertrailAddr != "" {
 		log.Printf("Certificate failures will be logged to papertrail at %s", *papertrailAddr)
 	}
+
 	if *domain == "" && *domains == "" {
 		log.Fatalf("You must provide a domain to validate, or domains file")
 	}
-	var domainsList []string
-	if *domains != "" {
-		domainsList = getDomains(*domains)
+
+	for {
+		domainsToCheck := getDomainsToCheck(*domain, *domains)
+		runValidation(domainsToCheck, *papertrailAddr)
+		time.Sleep(*interval)
 	}
-	if *domain != "" {
-		domainsList = append(domainsList, *domain)
+}
+
+func getDomainsToCheck(domain, domains string) []string {
+	var domainsList []string
+	if domains != "" {
+		domainsList = getDomains(domains)
+	}
+	if domain != "" {
+		domainsList = append(domainsList, domain)
 	}
 	var domainsToCheck []string
 	seen := make(map[string]bool)
@@ -62,10 +72,7 @@ func main() {
 		seen[v] = true
 		domainsToCheck = append(domainsToCheck, v)
 	}
-	for {
-		runValidation(domainsToCheck, *papertrailAddr)
-		time.Sleep(*interval)
-	}
+	return domainsToCheck
 }
 
 const maxConcurrentRequests = 100
