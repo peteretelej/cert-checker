@@ -61,8 +61,8 @@ func getDomainsToCheck(domain, domains string) []string {
 	}
 	var domainsToCheck []string
 	seen := make(map[string]bool)
-	for _, v := range domainsList {
-		v = sanitizeDomain(v)
+	for _, domainV := range domainsList {
+		v := sanitizeDomain(domainV)
 		if v == "" {
 			continue
 		}
@@ -114,7 +114,6 @@ func sanitizeDomain(domain string) string {
 	}
 	if !strings.HasPrefix(domain, "http") {
 		domain = fmt.Sprintf("https://%s", domain)
-		domain = fmt.Sprintf("http://%s", domain)
 	}
 	parsedURL, err := url.Parse(domain)
 	if err != nil {
