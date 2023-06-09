@@ -101,11 +101,13 @@ func runValidation(domainsToCheck []string, papertrailAddr string) {
 
 func sanitizeDomain(domain string) string {
 	domain = strings.TrimSpace(domain)
+	domain = strings.ToLower(domain)
 	if domain == "" {
 		return ""
 	}
 	if !strings.HasPrefix(domain, "http") {
 		domain = fmt.Sprintf("https://%s", domain)
+		domain = fmt.Sprintf("http://%s", domain)
 	}
 	parsedURL, err := url.Parse(domain)
 	if err != nil {
