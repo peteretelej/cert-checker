@@ -27,7 +27,7 @@ const appName = "cert-checker"
 func main() {
 	var (
 		domain         = flag.String("domain", "", "domain to validate")
-		interval       = flag.Duration("interval", time.Second*30, "interval to validate domain (optional, default 30s)")
+		interval       = flag.Duration("interval", time.Minute, "interval to validate domain (optional)")
 		papertrailAddr = flag.String("papertrail", "", "papertrail destination address logsN.papertrailapp.com:XXXXX (optional)")
 		domains        = flag.String("domains", "", "text file contain domains to validate, see sample (optional)")
 	)
@@ -66,15 +66,23 @@ func main() {
 		runValidation(domainsToCheck, *papertrailAddr)
 		time.Sleep(*interval)
 	}
-
 }
+
+const maxConcurrentRequests = 100
 
 func runValidation(domainsToCheck []string, papertrailAddr string) {
 	var wg sync.WaitGroup
+	maxReqs := make(chan bool, maxConcurrentRequests)
+
 	for _, domain := range domainsToCheck {
 		wg.Add(1)
+		maxReqs <- true
 		go func(domain string) {
-			defer wg.Done()
+			defer func() {
+				<-maxReqs
+				wg.Done()
+			}()
+
 			if err := validateDomain(domain); err != nil {
 				log.Printf(err.Error())
 				if err := paperlog(papertrailAddr, err.Error()); err != nil {
@@ -86,6 +94,9 @@ func runValidation(domainsToCheck []string, papertrailAddr string) {
 		}(domain)
 	}
 	wg.Wait()
+	for i := 0; i < cap(maxReqs); i++ {
+		maxReqs <- true
+	}
 }
 
 func sanitizeDomain(domain string) string {
@@ -263,10 +274,16 @@ func getOCSPResponse(req []byte, cert *x509.Certificate, issuer *x509.Certificat
 	}
 
 	url := cert.OCSPServer[0]
-	httpClient := &http.Client{}
+	httpClient := &http.Client{
+		Timeout: 10 * time.Second,
+	}
 	httpReq, err := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(req))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create HTTP request: %v", err)
+		if err, ok := err.(net.Error); ok && err.Timeout() {
+			return nil, fmt.Errorf("network timeout while contacting OCSP server: %w", err)
+		} else {
+			return nil, fmt.Errorf("network error while contacting OCSP server: %w", err)
+		}
 	}
 
 	httpReq.Header.Add("Content-Type", "application/ocsp-request")
